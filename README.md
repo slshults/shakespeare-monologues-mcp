@@ -36,30 +36,6 @@ npm start          # listens on :3000, POST /mcp   (set PORT to change)
 
 Health check: `GET /health` → `{"ok":true}`.
 
-## Deploy (DreamHost)
-
-This needs a host that runs a **persistent Node process** — so a **DreamHost VPS** or a
-**DreamCompute** instance, *not* shared hosting (DreamHost dropped Node support there).
-
-1. Node 20 LTS on the box. Clone the repo, `npm ci`, `npm run build`.
-2. Keep it running with a process manager, e.g. systemd or pm2:
-   ```bash
-   pm2 start dist/index.js --name shakes-mcp
-   ```
-   (or a `systemd` unit running `node /path/to/dist/index.js`, `PORT=3000`).
-3. Terminate TLS with nginx in front of it (Streamable HTTP is plain HTTP+JSON):
-   ```nginx
-   server {
-     server_name mcp.shakespeare-monologues.org;
-     location / { proxy_pass http://127.0.0.1:3000; proxy_http_version 1.1; }
-   }
-   ```
-   Then `certbot --nginx -d mcp.shakespeare-monologues.org` for the cert.
-4. In the DreamHost DNS panel, point `mcp.shakespeare-monologues.org` at the box
-   (an `A` record to its IP; DNS is already at DreamHost).
-
-Endpoint once live: `https://mcp.shakespeare-monologues.org/mcp`.
-
 ## Connecting a client
 
 Remote MCP means users add a **URL**, no install. In a client that supports remote /
@@ -73,11 +49,6 @@ https://mcp.shakespeare-monologues.org/mcp
 > discover and use this with zero user action — a client/platform still has to connect
 > it. For truly zero-setup access, agents can hit the plain JSON API
 > (`/api/monologues.json`) and `/llms.txt` directly.
-
-## Discovery
-
-Publish to the official MCP registry (<https://registry.modelcontextprotocol.io>) so
-directories and clients can surface it.
 
 ## License
 
