@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.slshults/shakespeare-monologues",
+  "title": "Shakespeare's Monologues",
+  "description": "Read-only MCP server for shakespeare-monologues.org — search and fetch Shakespeare monologue metadata, plays, paraphrases, and scene/play summaries.",
+  "repository": {
+    "url": "https://github.com/slshults/shakespeare-monologues-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.shakespeare-monologues.org/mcp"
+    }
+  ]
+}
