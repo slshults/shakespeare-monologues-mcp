@@ -45,6 +45,33 @@ custom MCP servers (Claude Desktop connectors, etc.), add:
 https://mcp.shakespeare-monologues.org/mcp
 ```
 
+For clients configured with a JSON config file, use the streamable-HTTP transport:
+
+```json
+{
+  "mcpServers": {
+    "shakespeare-monologues": {
+      "type": "streamable-http",
+      "url": "https://mcp.shakespeare-monologues.org/mcp"
+    }
+  }
+}
+```
+
+For a client that only speaks stdio, bridge to the remote server with
+[`mcp-remote`](https://www.npmjs.com/package/mcp-remote):
+
+```json
+{
+  "mcpServers": {
+    "shakespeare-monologues": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.shakespeare-monologues.org/mcp"]
+    }
+  }
+}
+```
+
 > Note on "autonomous" use: there's no mechanism today for an arbitrary agent to
 > discover and use this with zero user action — a client/platform still has to connect
 > it. For truly zero-setup access, agents can hit the plain JSON API
