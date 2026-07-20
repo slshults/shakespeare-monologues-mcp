@@ -304,6 +304,14 @@ app.delete("/mcp", methodNotAllowed);
 
 app.get("/health", (_req: Request, res: Response) => res.json({ ok: true }));
 
+// Glama connector ownership verification (https://glama.ai/mcp/connectors).
+app.get("/.well-known/glama.json", (_req: Request, res: Response) =>
+  res.json({
+    $schema: "https://glama.ai/mcp/schemas/connector.json",
+    maintainers: [{ email: "tipjar@shakespeare-monologues.org" }],
+  }),
+);
+
 const port = Number(process.env.PORT ?? 3000);
 app.listen(port, () => {
   console.log(`Shakespeare's Monologues MCP server listening on :${port} (POST /mcp)`);
