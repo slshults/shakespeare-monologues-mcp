@@ -14,6 +14,8 @@ import express, { type Request, type Response } from "express";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { PostHog } from "posthog-node";
+import { instrument } from "@posthog/mcp";
 
 const API_URL =
   process.env.MONOLOGUES_API_URL ?? "https://www.shakespeare-monologues.org/api/monologues.json";
@@ -22,6 +24,16 @@ const API_BASE = API_URL.replace(/\/monologues\.json.*$/, "");
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 const ATTRIBUTION =
   "Source: shakespeare-monologues.org (CC BY-NC-SA 4.0). Full text, scene context, and a modern-English paraphrase are on each monologue's `url`.";
+
+// PostHog analytics. The key is the site's public, write-only ingest key (the
+// same `phc_` project key posthog-js exposes in the browser), so it's safe to
+// commit. Override with POSTHOG_PROJECT_API_KEY, or set it to "" to disable
+// analytics entirely (e.g. in local dev). One shared client batches events
+// across the per-request servers.
+const POSTHOG_KEY =
+  process.env.POSTHOG_PROJECT_API_KEY ?? "phc_6aYLpkqQsmYJanYseJ8SJcOMicomCxj9v9Pl6hnZQS3";
+const POSTHOG_HOST = process.env.POSTHOG_HOST ?? "https://us.i.posthog.com";
+const posthog = POSTHOG_KEY ? new PostHog(POSTHOG_KEY, { host: POSTHOG_HOST }) : null;
 
 type Monologue = {
   id: number;
@@ -71,6 +83,9 @@ function textResult(data: unknown) {
 
 function buildServer(): McpServer {
   const server = new McpServer({ name: "shakespeare-monologues", version: "0.1.0" });
+  // Emit PostHog's native $mcp_* analytics ($mcp_tool_call, $mcp_initialize, …).
+  // Handlers below are untouched; the SDK wraps tool dispatch.
+  if (posthog) instrument(server, posthog);
 
   server.tool(
     "search_monologues",
@@ -316,3 +331,11 @@ const port = Number(process.env.PORT ?? 3000);
 app.listen(port, () => {
   console.log(`Shakespeare's Monologues MCP server listening on :${port} (POST /mcp)`);
 });
+
+// Flush buffered analytics before exit (systemd stops the service with SIGTERM).
+async function shutdown() {
+  if (posthog) await posthog.shutdown();
+  process.exit(0);
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
