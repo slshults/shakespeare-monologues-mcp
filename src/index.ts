@@ -243,10 +243,10 @@ function buildServer(): McpServer {
   server.tool(
     "get_scene_summary",
     "Fetch an AI-generated summary of the scene a monologue appears in (context for the speech). May be null if not generated yet.",
-    { monologue_id: z.number().int().describe("The id of a monologue in the scene.") },
-    async ({ monologue_id }) => {
-      const m = await fetchJson(`${API_BASE}/monologues/${monologue_id}`);
-      if (!m || m.error) return textResult({ error: `No monologue with id ${monologue_id}.` });
+    { id: z.number().int().describe("The numeric id of a monologue in the scene.") },
+    async ({ id }) => {
+      const m = await fetchJson(`${API_BASE}/monologues/${id}`);
+      if (!m || m.error) return textResult({ error: `No monologue with id ${id}.` });
       return textResult({
         play: m.play,
         location: m.location,
