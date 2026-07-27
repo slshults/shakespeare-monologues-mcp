@@ -77,50 +77,111 @@ function genderMatch(m: Monologue, gender?: string): boolean {
   return m.gender === gender || m.gender === "Both";
 }
 
-function textResult(data: unknown) {
+// A tool result carrying text content, optionally flagged as an error.
+type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
+
+function textResult(data: unknown): ToolResult {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+// Soft failure: return an actionable instruction the agent can act on, flagged
+// with isError so the client's recovery path engages — but never a raw -32602
+// or a thrown exception. Reserve this for genuine mistakes and transient
+// problems; a legitimately empty answer (no matches, a null summary) is a
+// normal success (textResult), not an error.
+function guide(message: string): ToolResult {
+  return { content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }], isError: true };
+}
+
+// Wrap a tool handler so an unexpected throw (e.g. the upstream API is down)
+// comes back as guidance instead of surfacing to the agent as a hard error.
+// Args are validated inside each handler, so the boundary type is intentionally
+// loose here.
+function safeTool(fn: (args: any) => Promise<ToolResult>): (args: any) => Promise<ToolResult> {
+  return async (args: any) => {
+    try {
+      return await fn(args);
+    } catch (err) {
+      console.error("Tool handler error:", err);
+      return guide("The monologue service is temporarily unavailable. Please try again in a moment.");
+    }
+  };
+}
+
+// Coerce a loosely-typed numeric arg (agents often send "5" instead of 5) to an
+// integer, or null if it isn't one.
+function coerceInt(value: unknown): number | null {
+  if (typeof value === "number") return Number.isInteger(value) ? value : null;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value.trim());
+    return Number.isInteger(n) ? n : null;
+  }
+  return null;
 }
 
 // Some clients pass natural gender words ("female", "male", "m") instead of the
 // catalogue's "Men"/"Women"/"Both". Map the common ones; anything unrecognized
-// falls through to the enum, which still rejects it.
+// is caught in-handler with a guiding message.
 const GENDER_ALIASES: Record<string, "Men" | "Women" | "Both"> = {
   men: "Men", man: "Men", male: "Men", males: "Men", m: "Men", boy: "Men", boys: "Men",
   women: "Women", woman: "Women", female: "Women", females: "Women", f: "Women", girl: "Women", girls: "Women",
   both: "Both", any: "Both", all: "Both", either: "Both", neutral: "Both",
 };
 
-function normalizeGender(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  return GENDER_ALIASES[value.trim().toLowerCase()] ?? value;
+// Returns the canonical gender, or null if the value isn't recognized.
+function normalizeGender(value: unknown): "Men" | "Women" | "Both" | null {
+  if (typeof value !== "string") return null;
+  return GENDER_ALIASES[value.trim().toLowerCase()] ?? null;
 }
 
-// Fresh instance per tool so the analytics wrapper never mutates a shared schema.
+function normalizeStyle(value: unknown): "Verse" | "Prose" | null {
+  if (typeof value !== "string") return null;
+  const s = value.trim().toLowerCase();
+  if (s === "verse") return "Verse";
+  if (s === "prose") return "Prose";
+  return null;
+}
+
+// Loose string fields: accept anything so the SDK never hard-rejects; the
+// handler normalizes and guides on unrecognized input.
 function genderField() {
   return z
-    .preprocess(normalizeGender, z.enum(["Men", "Women", "Both"]))
+    .string()
     .optional()
     .describe(
       "Role gender: Men, Women, or Both. Natural words like 'male'/'female' are accepted. 'Men'/'Women' also include gender-neutral ('Both') roles.",
     );
 }
 
+// A number-ish arg: accepts a number or a numeric string (agents send both).
+function numberish() {
+  return z.union([z.number(), z.string()]).optional();
+}
+
 // The by-id tools take a numeric `id`; `monologue_id` is an older alias some
-// clients still send. Both optional so a missing id returns NO_ID_MSG (below)
-// rather than a raw -32602. Fresh instance per tool (see genderField).
+// clients still send. Both optional and number-ish so bad/missing input returns
+// guidance rather than a raw -32602. Fresh instance per tool so the analytics
+// wrapper never mutates a shared schema.
 function byIdShape() {
   return {
-    id: z.number().int().optional().describe("The monologue's numeric id (from search_monologues)."),
-    monologue_id: z.number().int().optional().describe("Deprecated alias for `id`."),
+    id: numberish().describe("The monologue's numeric id (from search_monologues)."),
+    monologue_id: numberish().describe("Deprecated alias for `id`."),
   };
 }
 
-function resolveMonologueId(args: { id?: number; monologue_id?: number }): number | null {
-  return args.id ?? args.monologue_id ?? null;
+function resolveMonologueId(args: { id?: unknown; monologue_id?: unknown }): number | null {
+  return coerceInt(args.id) ?? coerceInt(args.monologue_id);
 }
 
 const NO_ID_MSG =
-  "Missing numeric monologue `id`. Use search_monologues or list_all_monologues_for_a_character to find the monologue first, then pass its `id`.";
+  "Need a numeric monologue `id`. Use search_monologues or list_all_monologues_for_a_character to find the monologue first, then pass its `id`.";
+
+// Clamp a requested result limit into range, defaulting when absent/unparseable.
+function resolveLimit(value: unknown, def: number, max: number): number {
+  const n = coerceInt(value);
+  if (n == null) return def;
+  return Math.max(1, Math.min(max, n));
+}
 
 function buildServer(): McpServer {
   const server = new McpServer({ name: "shakespeare-monologues", version: "0.1.0" });
@@ -138,19 +199,37 @@ function buildServer(): McpServer {
         .describe("Free text — matched against character name, play title, and first line."),
       gender: genderField(),
       play: z.string().optional().describe("Exact or partial play title."),
-      style: z.enum(["Verse", "Prose"]).optional().describe("Verse or prose."),
-      act: z.number().int().optional().describe("Filter to a specific act number."),
-      limit: z.number().int().min(1).max(100).optional().describe("Max results to return (default 25)."),
+      style: z.string().optional().describe("Verse or Prose."),
+      act: numberish().describe("Filter to a specific act number."),
+      limit: numberish().describe("Max results to return (default 25, max 100)."),
     },
-    async ({ query, gender, play, style, act, limit }) => {
+    safeTool(async ({ query, gender, play, style, act, limit }) => {
+      let genderFilter: "Men" | "Women" | "Both" | undefined;
+      if (gender != null && String(gender).trim() !== "") {
+        const g = normalizeGender(gender);
+        if (!g) return guide(`Unrecognized gender "${gender}". Use Men, Women, or Both (male/female also work).`);
+        genderFilter = g;
+      }
+      let styleFilter: "Verse" | "Prose" | undefined;
+      if (style != null && String(style).trim() !== "") {
+        const s = normalizeStyle(style);
+        if (!s) return guide(`Unrecognized style "${style}". Use Verse or Prose.`);
+        styleFilter = s;
+      }
+      let actFilter: number | null = null;
+      if (act != null && String(act).trim() !== "") {
+        actFilter = coerceInt(act);
+        if (actFilter == null) return guide(`Act "${act}" isn't a number. Pass an act number like 1, 2, or 3.`);
+      }
+
       const all = await getIndex();
       const q = (query ?? "").trim().toLowerCase();
       const playQ = (play ?? "").trim().toLowerCase();
 
       const matches = all.filter((m) => {
-        if (!genderMatch(m, gender)) return false;
-        if (style && m.style !== style) return false;
-        if (act != null && m.act !== act) return false;
+        if (!genderMatch(m, genderFilter)) return false;
+        if (styleFilter && m.style !== styleFilter) return false;
+        if (actFilter != null && m.act !== actFilter) return false;
         if (playQ && !m.play.toLowerCase().includes(playQ)) return false;
         if (
           q &&
@@ -165,28 +244,28 @@ function buildServer(): McpServer {
         return true;
       });
 
-      const returned = matches.slice(0, limit ?? 25);
+      const returned = matches.slice(0, resolveLimit(limit, 25, 100));
       return textResult({
         total_matches: matches.length,
         returned: returned.length,
         attribution: ATTRIBUTION,
         monologues: returned,
       });
-    },
+    }),
   );
 
   server.tool(
     "get_monologue",
     "Fetch one monologue's catalogue entry by its numeric id. Follow the returned `url` for the full text.",
     byIdShape(),
-    async (args) => {
+    safeTool(async (args) => {
       const id = resolveMonologueId(args);
-      if (id == null) return textResult({ error: NO_ID_MSG });
+      if (id == null) return guide(NO_ID_MSG);
       const all = await getIndex();
       const m = all.find((x) => x.id === id);
-      if (!m) return textResult({ error: `No monologue found with id ${id}.` });
+      if (!m) return guide(`No monologue has id ${id}. Use search_monologues to find a valid id.`);
       return textResult({ ...m, attribution: ATTRIBUTION });
-    },
+    }),
   );
 
   server.tool(
@@ -196,23 +275,29 @@ function buildServer(): McpServer {
       gender: genderField(),
       play: z.string().optional().describe("Exact or partial play title."),
     },
-    async ({ gender, play }) => {
+    safeTool(async ({ gender, play }) => {
+      let genderFilter: "Men" | "Women" | "Both" | undefined;
+      if (gender != null && String(gender).trim() !== "") {
+        const g = normalizeGender(gender);
+        if (!g) return guide(`Unrecognized gender "${gender}". Use Men, Women, or Both (male/female also work).`);
+        genderFilter = g;
+      }
       const all = await getIndex();
       const playQ = (play ?? "").trim().toLowerCase();
       const pool = all.filter(
-        (m) => genderMatch(m, gender) && (!playQ || m.play.toLowerCase().includes(playQ)),
+        (m) => genderMatch(m, genderFilter) && (!playQ || m.play.toLowerCase().includes(playQ)),
       );
-      if (pool.length === 0) return textResult({ error: "No monologues match those filters." });
+      if (pool.length === 0) return textResult({ message: "No monologues match those filters." });
       const m = pool[Math.floor(Math.random() * pool.length)];
       return textResult({ ...m, attribution: ATTRIBUTION });
-    },
+    }),
   );
 
   server.tool(
     "list_plays",
     "List Shakespeare's plays with their classification (Comedy/History/Tragedy) and monologue counts.",
     {},
-    async () => {
+    safeTool(async () => {
       const all = await getIndex();
       const byPlay = new Map<string, { play: string; play_type: string; monologue_count: number }>();
       for (const m of all) {
@@ -222,22 +307,23 @@ function buildServer(): McpServer {
       }
       const plays = [...byPlay.values()].sort((a, b) => a.play.localeCompare(b.play));
       return textResult({ count: plays.length, plays });
-    },
+    }),
   );
 
   server.tool(
     "list_all_monologues_for_a_character",
     "List every monologue spoken by a given character (e.g. 'Hamlet', 'Rosalind'). Matches the character name exactly first, then as a substring.",
     {
-      character: z.string().describe("Character name."),
-      limit: z.number().int().min(1).max(200).optional().describe("Max results (default 50)."),
+      character: z.string().optional().describe("Character name."),
+      limit: numberish().describe("Max results (default 50, max 200)."),
     },
-    async ({ character, limit }) => {
+    safeTool(async ({ character, limit }) => {
+      const c = (character ?? "").trim().toLowerCase();
+      if (!c) return guide("Provide a `character` name, e.g. 'Hamlet' or 'Rosalind'.");
       const all = await getIndex();
-      const c = character.trim().toLowerCase();
       const exact = all.filter((m) => m.character.toLowerCase() === c);
       const matches = exact.length > 0 ? exact : all.filter((m) => m.character.toLowerCase().includes(c));
-      const returned = matches.slice(0, limit ?? 50);
+      const returned = matches.slice(0, resolveLimit(limit, 50, 200));
       return textResult({
         character,
         total_matches: matches.length,
@@ -245,29 +331,29 @@ function buildServer(): McpServer {
         attribution: ATTRIBUTION,
         monologues: returned,
       });
-    },
+    }),
   );
 
   server.tool(
     "get_monologue_of_the_day",
     "The current 'Monologue of the Day' — the piece most recently posted to the site's social feeds.",
     {},
-    async () => {
+    safeTool(async () => {
       const mod = await fetchJson(`${API_BASE}/monologue-of-the-day.json`);
-      if (!mod) return textResult({ error: "No monologue of the day is available." });
+      if (!mod) return textResult({ message: "No monologue of the day is available." });
       return textResult(mod);
-    },
+    }),
   );
 
   server.tool(
     "get_paraphrased_monologue",
     "Fetch a monologue's full text alongside its modern-English, line-by-line paraphrase. The paraphrase is AI-generated (Claude) and may be null if it hasn't been generated yet — the `url` always has the monologue itself.",
     byIdShape(),
-    async (args) => {
+    safeTool(async (args) => {
       const id = resolveMonologueId(args);
-      if (id == null) return textResult({ error: NO_ID_MSG });
+      if (id == null) return guide(NO_ID_MSG);
       const m = await fetchJson(`${API_BASE}/monologues/${id}`);
-      if (!m || m.error) return textResult({ error: `No monologue with id ${id}.` });
+      if (!m || m.error) return guide(`No monologue has id ${id}. Use search_monologues to find a valid id.`);
       return textResult({
         id: m.id,
         character: m.character,
@@ -279,18 +365,18 @@ function buildServer(): McpServer {
         note: m.content_note,
         attribution: ATTRIBUTION,
       });
-    },
+    }),
   );
 
   server.tool(
     "get_scene_summary",
     "Fetch an AI-generated summary of the scene a monologue appears in (context for the speech). May be null if not generated yet.",
     byIdShape(),
-    async (args) => {
+    safeTool(async (args) => {
       const id = resolveMonologueId(args);
-      if (id == null) return textResult({ error: NO_ID_MSG });
+      if (id == null) return guide(NO_ID_MSG);
       const m = await fetchJson(`${API_BASE}/monologues/${id}`);
-      if (!m || m.error) return textResult({ error: `No monologue with id ${id}.` });
+      if (!m || m.error) return guide(`No monologue has id ${id}. Use search_monologues to find a valid id.`);
       return textResult({
         play: m.play,
         location: m.location,
@@ -299,26 +385,28 @@ function buildServer(): McpServer {
         note: m.content_note,
         attribution: ATTRIBUTION,
       });
-    },
+    }),
   );
 
   server.tool(
     "get_play_summary",
     "Fetch an AI-generated summary of a play (e.g. 'Hamlet', 'The Tempest'). May be null if not generated yet.",
-    { play: z.string().describe("Play title (exact or partial).") },
-    async ({ play }) => {
+    { play: z.string().optional().describe("Play title (exact or partial).") },
+    safeTool(async ({ play }) => {
+      const p = (play ?? "").trim().toLowerCase();
+      if (!p) return guide("Provide a `play` title, e.g. 'Hamlet' or 'The Tempest'. Use list_plays to see the options.");
       const all = await getIndex();
-      const p = play.trim().toLowerCase();
       const hit = all.find((m) => m.play.toLowerCase() === p) ?? all.find((m) => m.play.toLowerCase().includes(p));
-      if (!hit) return textResult({ error: `No play matching "${play}".` });
+      if (!hit) return guide(`No play matches "${play}". Use list_plays to see available titles.`);
       const full = await fetchJson(`${API_BASE}/monologues/${hit.id}`);
+      if (!full || full.error) return guide(`Couldn't load the summary for "${hit.play}". Please try again in a moment.`);
       return textResult({
         play: full.play,
         play_summary: full.play_summary,
         note: full.content_note,
         attribution: ATTRIBUTION,
       });
-    },
+    }),
   );
 
   return server;
