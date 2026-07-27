@@ -81,6 +81,47 @@ function textResult(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
+// Some clients pass natural gender words ("female", "male", "m") instead of the
+// catalogue's "Men"/"Women"/"Both". Map the common ones; anything unrecognized
+// falls through to the enum, which still rejects it.
+const GENDER_ALIASES: Record<string, "Men" | "Women" | "Both"> = {
+  men: "Men", man: "Men", male: "Men", males: "Men", m: "Men", boy: "Men", boys: "Men",
+  women: "Women", woman: "Women", female: "Women", females: "Women", f: "Women", girl: "Women", girls: "Women",
+  both: "Both", any: "Both", all: "Both", either: "Both", neutral: "Both",
+};
+
+function normalizeGender(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  return GENDER_ALIASES[value.trim().toLowerCase()] ?? value;
+}
+
+// Fresh instance per tool so the analytics wrapper never mutates a shared schema.
+function genderField() {
+  return z
+    .preprocess(normalizeGender, z.enum(["Men", "Women", "Both"]))
+    .optional()
+    .describe(
+      "Role gender: Men, Women, or Both. Natural words like 'male'/'female' are accepted. 'Men'/'Women' also include gender-neutral ('Both') roles.",
+    );
+}
+
+// The by-id tools take a numeric `id`; `monologue_id` is an older alias some
+// clients still send. Both optional so a missing id returns NO_ID_MSG (below)
+// rather than a raw -32602. Fresh instance per tool (see genderField).
+function byIdShape() {
+  return {
+    id: z.number().int().optional().describe("The monologue's numeric id (from search_monologues)."),
+    monologue_id: z.number().int().optional().describe("Deprecated alias for `id`."),
+  };
+}
+
+function resolveMonologueId(args: { id?: number; monologue_id?: number }): number | null {
+  return args.id ?? args.monologue_id ?? null;
+}
+
+const NO_ID_MSG =
+  "Missing numeric monologue `id`. Use search_monologues or list_all_monologues_for_a_character to find the monologue first, then pass its `id`.";
+
 function buildServer(): McpServer {
   const server = new McpServer({ name: "shakespeare-monologues", version: "0.1.0" });
   // Emit PostHog's native $mcp_* analytics ($mcp_tool_call, $mcp_initialize, …).
@@ -95,10 +136,7 @@ function buildServer(): McpServer {
         .string()
         .optional()
         .describe("Free text — matched against character name, play title, and first line."),
-      gender: z
-        .enum(["Men", "Women", "Both"])
-        .optional()
-        .describe("Role gender as catalogued. 'Men'/'Women' also include gender-neutral ('Both') roles."),
+      gender: genderField(),
       play: z.string().optional().describe("Exact or partial play title."),
       style: z.enum(["Verse", "Prose"]).optional().describe("Verse or prose."),
       act: z.number().int().optional().describe("Filter to a specific act number."),
@@ -140,8 +178,10 @@ function buildServer(): McpServer {
   server.tool(
     "get_monologue",
     "Fetch one monologue's catalogue entry by its numeric id. Follow the returned `url` for the full text.",
-    { id: z.number().int().describe("The monologue's numeric id.") },
-    async ({ id }) => {
+    byIdShape(),
+    async (args) => {
+      const id = resolveMonologueId(args);
+      if (id == null) return textResult({ error: NO_ID_MSG });
       const all = await getIndex();
       const m = all.find((x) => x.id === id);
       if (!m) return textResult({ error: `No monologue found with id ${id}.` });
@@ -153,7 +193,7 @@ function buildServer(): McpServer {
     "random_monologue",
     "Return one random monologue, with optional gender/play filters. Useful for a suggestion when the user is undecided.",
     {
-      gender: z.enum(["Men", "Women", "Both"]).optional(),
+      gender: genderField(),
       play: z.string().optional().describe("Exact or partial play title."),
     },
     async ({ gender, play }) => {
@@ -222,8 +262,10 @@ function buildServer(): McpServer {
   server.tool(
     "get_paraphrased_monologue",
     "Fetch a monologue's full text alongside its modern-English, line-by-line paraphrase. The paraphrase is AI-generated (Claude) and may be null if it hasn't been generated yet — the `url` always has the monologue itself.",
-    { id: z.number().int().describe("The monologue's numeric id.") },
-    async ({ id }) => {
+    byIdShape(),
+    async (args) => {
+      const id = resolveMonologueId(args);
+      if (id == null) return textResult({ error: NO_ID_MSG });
       const m = await fetchJson(`${API_BASE}/monologues/${id}`);
       if (!m || m.error) return textResult({ error: `No monologue with id ${id}.` });
       return textResult({
@@ -243,8 +285,10 @@ function buildServer(): McpServer {
   server.tool(
     "get_scene_summary",
     "Fetch an AI-generated summary of the scene a monologue appears in (context for the speech). May be null if not generated yet.",
-    { id: z.number().int().describe("The numeric id of a monologue in the scene.") },
-    async ({ id }) => {
+    byIdShape(),
+    async (args) => {
+      const id = resolveMonologueId(args);
+      if (id == null) return textResult({ error: NO_ID_MSG });
       const m = await fetchJson(`${API_BASE}/monologues/${id}`);
       if (!m || m.error) return textResult({ error: `No monologue with id ${id}.` });
       return textResult({
