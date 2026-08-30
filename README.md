@@ -82,3 +82,7 @@ For a client that only speaks stdio, bridge to the remote server with
 - **Code:** MIT.
 - **Data** served through it: © shakespeare-monologues.org, **CC BY-NC-SA 4.0** — please
   keep the attribution that each tool response includes.
+
+---
+
+[![shakespeare-monologues-mcp MCP server](https://glama.ai/mcp/servers/slshults/shakespeare-monologues-mcp/badges/score.svg)](https://glama.ai/mcp/servers/slshults/shakespeare-monologues-mcp)
