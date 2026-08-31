@@ -7,7 +7,7 @@
     "url": "https://github.com/slshults/shakespeare-monologues-mcp",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "websiteUrl": "https://www.shakespeare-monologues.org",
   "remotes": [
     {
@@ -19,7 +19,7 @@
     {
       "registryType": "npm",
       "identifier": "shakespeare-monologues-mcp",
-      "version": "0.1.1",
+      "version": "0.1.0",
       "transport": {
         "type": "stdio"
       }
