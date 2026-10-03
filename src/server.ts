@@ -147,15 +147,20 @@ function normalizeStyle(value: unknown): "Verse" | "Prose" | null {
 function genderField() {
   return z
     .string()
-    .optional()
+    .nullish()
     .describe(
       "Role gender: Men, Women, or Both. Natural words like 'male'/'female' are accepted. 'Men'/'Women' also include gender-neutral ('Both') roles.",
     );
 }
 
 // A number-ish arg: accepts a number or a numeric string (agents send both).
+// Every optional field is .nullish(), not .optional(): some clients send an
+// explicit null for "not set", and .optional() rejects that with a raw
+// validation error instead of reaching the handler's guidance.
 function numberish() {
-  return z.union([z.number(), z.string()]).optional();
+  // null inside the union (not .nullish()) so tools/list emits a flat
+  // type: [number, string, null] rather than an anyOf.
+  return z.union([z.number(), z.string(), z.null()]).optional();
 }
 
 // The by-id tools take a numeric `id`; `monologue_id` is an older alias some
@@ -195,11 +200,11 @@ export function buildServer(): McpServer {
     {
       query: z
         .string()
-        .optional()
+        .nullish()
         .describe("Free text — matched against character name, play title, and first line."),
       gender: genderField(),
-      play: z.string().optional().describe("Exact or partial play title."),
-      style: z.string().optional().describe("Verse or Prose."),
+      play: z.string().nullish().describe("Exact or partial play title."),
+      style: z.string().nullish().describe("Verse or Prose."),
       act: numberish().describe("Filter to a specific act number."),
       limit: numberish().describe("Max results to return (default 25, max 100)."),
     },
@@ -273,7 +278,7 @@ export function buildServer(): McpServer {
     "Return one random monologue, with optional gender/play filters. Useful for a suggestion when the user is undecided.",
     {
       gender: genderField(),
-      play: z.string().optional().describe("Exact or partial play title."),
+      play: z.string().nullish().describe("Exact or partial play title."),
     },
     safeTool(async ({ gender, play }) => {
       let genderFilter: "Men" | "Women" | "Both" | undefined;
@@ -314,7 +319,7 @@ export function buildServer(): McpServer {
     "list_all_monologues_for_a_character",
     "List every monologue spoken by a given character (e.g. 'Hamlet', 'Rosalind'). Matches the character name exactly first, then as a substring.",
     {
-      character: z.string().optional().describe("Character name."),
+      character: z.string().nullish().describe("Character name."),
       limit: numberish().describe("Max results (default 50, max 200)."),
     },
     safeTool(async ({ character, limit }) => {
@@ -391,7 +396,7 @@ export function buildServer(): McpServer {
   server.tool(
     "get_play_summary",
     "Fetch an AI-generated summary of a play (e.g. 'Hamlet', 'The Tempest'). May be null if not generated yet.",
-    { play: z.string().optional().describe("Play title (exact or partial).") },
+    { play: z.string().nullish().describe("Play title (exact or partial).") },
     safeTool(async ({ play }) => {
       const p = (play ?? "").trim().toLowerCase();
       if (!p) return guide("Provide a `play` title, e.g. 'Hamlet' or 'The Tempest'. Use list_plays to see the options.");
