@@ -28,6 +28,18 @@ paraphrase live) and an attribution note.
 
 ## Run locally
 
+Two transports, same tools. `server.ts` builds the tool surface and knows
+nothing about how it's reached; `index.ts` serves it over HTTP and `stdio.ts`
+over stdio.
+
+**Over stdio**, the way an MCP client spawns a local server:
+
+```bash
+npx shakespeare-monologues-mcp
+```
+
+**Over HTTP**, which is how the hosted instance runs:
+
 ```bash
 npm install
 npm run build
@@ -36,6 +48,10 @@ npm start          # listens on :3000, POST /mcp   (set PORT to change)
 
 Health check: `GET /health` → `{"ok":true}`.
 
+Neither mode needs credentials — the server reads the site's public JSON index.
+Set `MONOLOGUES_API_URL` to point it elsewhere, and `POSTHOG_PROJECT_API_KEY=""`
+to disable analytics.
+
 ## Connecting a client
 
 Remote MCP means users add a **URL**, no install. In a client that supports remote /
@@ -43,6 +59,19 @@ custom MCP servers (Claude Desktop connectors, etc.), add:
 
 ```
 https://mcp.shakespeare-monologues.org/mcp
+```
+
+Or run it yourself over stdio, with no hosted dependency:
+
+```json
+{
+  "mcpServers": {
+    "shakespeare-monologues": {
+      "command": "npx",
+      "args": ["-y", "shakespeare-monologues-mcp"]
+    }
+  }
+}
 ```
 
 For clients configured with a JSON config file, use the streamable-HTTP transport:
@@ -82,3 +111,7 @@ For a client that only speaks stdio, bridge to the remote server with
 - **Code:** MIT.
 - **Data** served through it: © shakespeare-monologues.org, **CC BY-NC-SA 4.0** — please
   keep the attribution that each tool response includes.
+
+---
+
+[![shakespeare-monologues-mcp MCP server](https://glama.ai/mcp/servers/slshults/shakespeare-monologues-mcp/badges/score.svg)](https://glama.ai/mcp/servers/slshults/shakespeare-monologues-mcp)

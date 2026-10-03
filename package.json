@@ -1,8 +1,28 @@
 {
   "name": "shakespeare-monologues-mcp",
   "version": "0.1.0",
+  "mcpName": "io.github.slshults/shakespeare-monologues",
   "description": "Read-only MCP server for shakespeare-monologues.org — search and fetch Shakespeare monologue metadata over the Model Context Protocol.",
   "license": "MIT",
+  "author": "Steven Shults",
+  "homepage": "https://www.shakespeare-monologues.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/slshults/shakespeare-monologues-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/slshults/shakespeare-monologues-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "mcp-server",
+    "shakespeare",
+    "monologues",
+    "theatre",
+    "acting",
+    "audition"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "engines": {
@@ -12,7 +32,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
+    "start:stdio": "node dist/stdio.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -25,5 +47,13 @@
     "@types/express": "^4.17.21",
     "@types/node": "^20.14.0",
     "typescript": "^5.5.0"
-  }
+  },
+  "bin": {
+    "shakespeare-monologues-mcp": "./dist/stdio.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ]
 }
