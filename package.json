@@ -37,8 +37,8 @@
     "start:stdio": "node dist/stdio.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "@posthog/mcp": "^0.9.1",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@posthog/mcp": "^0.22.1",
     "express": "^4.19.2",
     "posthog-node": "^5.21.2",
     "zod": "^3.23.8"
