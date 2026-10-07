@@ -188,11 +188,19 @@ function resolveLimit(value: unknown, def: number, max: number): number {
   return Math.max(1, Math.min(max, n));
 }
 
-export function buildServer(): McpServer {
+// `conversationIds` lets the SDK mint a conversation_id for calls that carry no
+// session header, so stateless HTTP clients that echo it back group into one
+// session. Turn
+// it off for stdio, where one process already is one session.
+export function buildServer({ conversationIds = true } = {}): McpServer {
   const server = new McpServer({ name: "shakespeare-monologues", version: "0.1.0" });
   // Emit PostHog's native $mcp_* analytics ($mcp_tool_call, $mcp_initialize, …).
-  // Handlers below are untouched; the SDK wraps tool dispatch.
-  if (posthog) instrument(server, posthog);
+  // Handlers below are untouched; the SDK wraps tool dispatch. collectFeedback
+  // adds a `send_feedback` tool so agents can report missing capabilities or
+  // issues ($mcp_feedback).
+  if (posthog) {
+    instrument(server, posthog, { collectFeedback: true, enableConversationId: conversationIds });
+  }
 
   server.tool(
     "search_monologues",
