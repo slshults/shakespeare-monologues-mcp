@@ -188,6 +188,12 @@ function resolveLimit(value: unknown, def: number, max: number): number {
   return Math.max(1, Math.min(max, n));
 }
 
+const FEEDBACK_TOOL_DESCRIPTION =
+  "Send feedback about this Shakespeare monologues server: a monologue, play or capability " +
+  "you needed that its tools could not provide, a problem with a result, or praise. " +
+  "Only for feedback about these tools, not about other tasks. " +
+  "Do not include personal information about the user.";
+
 // `conversationIds` lets the SDK mint a conversation_id for calls that carry no
 // session header, so stateless HTTP clients that echo it back group into one
 // session. Turn
@@ -197,9 +203,14 @@ export function buildServer({ conversationIds = true } = {}): McpServer {
   // Emit PostHog's native $mcp_* analytics ($mcp_tool_call, $mcp_initialize, …).
   // Handlers below are untouched; the SDK wraps tool dispatch. collectFeedback
   // adds a `send_feedback` tool so agents can report missing capabilities or
-  // issues ($mcp_feedback).
+  // issues ($mcp_feedback). Its description is scoped to this server: the SDK
+  // default invites feedback about any task, which in a client with many
+  // connectors would pull summaries of unrelated requests into analytics.
   if (posthog) {
-    instrument(server, posthog, { collectFeedback: true, enableConversationId: conversationIds });
+    instrument(server, posthog, {
+      collectFeedback: { description: FEEDBACK_TOOL_DESCRIPTION },
+      enableConversationId: conversationIds,
+    });
   }
 
   server.tool(
