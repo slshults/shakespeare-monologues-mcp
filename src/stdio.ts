@@ -11,7 +11,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { buildServer, posthog } from "./server.js";
 
-const server = buildServer();
+const server = buildServer({ conversationIds: false });
 const transport = new StdioServerTransport();
 
 async function shutdown() {

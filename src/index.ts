@@ -13,9 +13,13 @@ const app = express();
 app.use(express.json());
 
 // Tool names this server registers, for spotting calls to tools that don't exist.
-const KNOWN_TOOLS = new Set(
-  Object.keys((buildServer() as unknown as { _registeredTools: Record<string, unknown> })._registeredTools),
-);
+// `send_feedback` is served by the PostHog SDK (collectFeedback) at dispatch
+// time, so it never appears in _registeredTools, and only exists when
+// analytics is on.
+const KNOWN_TOOLS = new Set([
+  ...Object.keys((buildServer() as unknown as { _registeredTools: Record<string, unknown> })._registeredTools),
+  ...(posthog ? ["send_feedback"] : []),
+]);
 
 // Scanners sweep fake tool names; the SDK answers -32602 and the PostHog
 // $exception + Slack alert still fire. This adds the client IP to the journal.
@@ -38,7 +42,13 @@ app.post("/mcp", async (req: Request, res: Response) => {
   try {
     logUnknownToolCalls(req);
     const server = buildServer();
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    // JSON responses, not SSE: SSE flushes headers before the handler runs, so
+    // the analytics session token never reaches the client and every request
+    // becomes its own PostHog session.
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
     res.on("close", () => {
       transport.close();
       server.close();

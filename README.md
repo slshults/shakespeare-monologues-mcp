@@ -22,6 +22,7 @@ paraphrase live) and an attribution note.
 | `get_paraphrased_monologue` | A monologue's full text + its modern-English paraphrase (AI-generated; may be null if not yet generated). |
 | `get_scene_summary` | AI-generated summary of the scene a monologue is in (by monologue id). |
 | `get_play_summary` | AI-generated summary of a play (by title). |
+| `send_feedback` | Lets an agent report a missing capability, a problem, or praise. Added by the PostHog analytics SDK; only present when analytics is on. |
 
 > The paraphrase and summaries are AI-generated (Claude) and only partially cached so far,
 > so those tools return `null` where content hasn't been generated yet.
