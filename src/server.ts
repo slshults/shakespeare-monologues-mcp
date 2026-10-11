@@ -188,6 +188,22 @@ function resolveLimit(value: unknown, def: number, max: number): number {
   return Math.max(1, Math.min(max, n));
 }
 
+// Sent once at connect time. Clients that support it put this in the agent's
+// context, so it's where the workflow is explained once instead of piecemeal
+// across tool descriptions.
+export const SERVER_INSTRUCTIONS =
+  "Shakespeare monologues for actors, from shakespeare-monologues.org. Three tools work on one " +
+  "monologue and need its numeric `id`, which you only get from search_monologues, " +
+  "list_all_monologues_for_a_character, random_monologue or get_monologue_of_the_day. So find " +
+  "the monologue first, then pass that number as `id` to get_monologue (catalogue entry and " +
+  "link), get_paraphrased_monologue (full text plus a modern-English paraphrase) or " +
+  "get_scene_summary (what's happening in the scene). get_play_summary takes a play title " +
+  "instead; list_plays shows the exact titles. AI summaries and paraphrases can be null if not " +
+  "generated yet; the monologue's `url` always works.";
+
+// Every tool only reads the site's public catalogue.
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, openWorldHint: false } as const;
+
 const FEEDBACK_TOOL_DESCRIPTION =
   "Send feedback about this Shakespeare monologues server: a monologue, play or capability " +
   "you needed that its tools could not provide, a problem with a result, or praise. " +
@@ -199,7 +215,10 @@ const FEEDBACK_TOOL_DESCRIPTION =
 // session. Turn
 // it off for stdio, where one process already is one session.
 export function buildServer({ conversationIds = true } = {}): McpServer {
-  const server = new McpServer({ name: "shakespeare-monologues", version: "0.2.0" });
+  const server = new McpServer(
+    { name: "shakespeare-monologues", version: "0.2.0" },
+    { instructions: SERVER_INSTRUCTIONS },
+  );
   // Emit PostHog's native $mcp_* analytics ($mcp_tool_call, $mcp_initialize, …).
   // Handlers below are untouched; the SDK wraps tool dispatch. collectFeedback
   // adds a `send_feedback` tool so agents can report missing capabilities or
@@ -227,6 +246,7 @@ export function buildServer({ conversationIds = true } = {}): McpServer {
       act: numberish().describe("Filter to a specific act number."),
       limit: numberish().describe("Max results to return (default 25, max 100)."),
     },
+    READ_ONLY,
     safeTool(async ({ query, gender, play, style, act, limit }) => {
       let genderFilter: "Men" | "Women" | "Both" | undefined;
       if (gender != null && String(gender).trim() !== "") {
@@ -282,6 +302,7 @@ export function buildServer({ conversationIds = true } = {}): McpServer {
     "get_monologue",
     "Fetch one monologue's catalogue entry by its numeric id. Follow the returned `url` for the full text.",
     byIdShape(),
+    READ_ONLY,
     safeTool(async (args) => {
       const id = resolveMonologueId(args);
       if (id == null) return guide(NO_ID_MSG);
@@ -299,6 +320,7 @@ export function buildServer({ conversationIds = true } = {}): McpServer {
       gender: genderField(),
       play: z.string().nullish().describe("Exact or partial play title."),
     },
+    READ_ONLY,
     safeTool(async ({ gender, play }) => {
       let genderFilter: "Men" | "Women" | "Both" | undefined;
       if (gender != null && String(gender).trim() !== "") {
@@ -321,6 +343,7 @@ export function buildServer({ conversationIds = true } = {}): McpServer {
     "list_plays",
     "List Shakespeare's plays with their classification (Comedy/History/Tragedy) and monologue counts.",
     {},
+    READ_ONLY,
     safeTool(async () => {
       const all = await getIndex();
       const byPlay = new Map<string, { play: string; play_type: string; monologue_count: number }>();
@@ -341,6 +364,7 @@ export function buildServer({ conversationIds = true } = {}): McpServer {
       character: z.string().nullish().describe("Character name."),
       limit: numberish().describe("Max results (default 50, max 200)."),
     },
+    READ_ONLY,
     safeTool(async ({ character, limit }) => {
       const c = (character ?? "").trim().toLowerCase();
       if (!c) return guide("Provide a `character` name, e.g. 'Hamlet' or 'Rosalind'.");
@@ -362,6 +386,7 @@ export function buildServer({ conversationIds = true } = {}): McpServer {
     "get_monologue_of_the_day",
     "The current 'Monologue of the Day' — the piece most recently posted to the site's social feeds.",
     {},
+    READ_ONLY,
     safeTool(async () => {
       const mod = await fetchJson(`${API_BASE}/monologue-of-the-day.json`);
       if (!mod) return textResult({ message: "No monologue of the day is available." });
@@ -373,6 +398,7 @@ export function buildServer({ conversationIds = true } = {}): McpServer {
     "get_paraphrased_monologue",
     "Fetch a monologue's full text alongside its modern-English, line-by-line paraphrase. The paraphrase is AI-generated (Claude) and may be null if it hasn't been generated yet — the `url` always has the monologue itself.",
     byIdShape(),
+    READ_ONLY,
     safeTool(async (args) => {
       const id = resolveMonologueId(args);
       if (id == null) return guide(NO_ID_MSG);
@@ -396,6 +422,7 @@ export function buildServer({ conversationIds = true } = {}): McpServer {
     "get_scene_summary",
     "Fetch an AI-generated summary of the scene a monologue appears in (context for the speech). May be null if not generated yet.",
     byIdShape(),
+    READ_ONLY,
     safeTool(async (args) => {
       const id = resolveMonologueId(args);
       if (id == null) return guide(NO_ID_MSG);
@@ -416,6 +443,7 @@ export function buildServer({ conversationIds = true } = {}): McpServer {
     "get_play_summary",
     "Fetch an AI-generated summary of a play (e.g. 'Hamlet', 'The Tempest'). May be null if not generated yet.",
     { play: z.string().nullish().describe("Play title (exact or partial).") },
+    READ_ONLY,
     safeTool(async ({ play }) => {
       const p = (play ?? "").trim().toLowerCase();
       if (!p) return guide("Provide a `play` title, e.g. 'Hamlet' or 'The Tempest'. Use list_plays to see the options.");
