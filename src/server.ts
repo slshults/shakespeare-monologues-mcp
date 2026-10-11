@@ -193,7 +193,7 @@ function resolveLimit(value: unknown, def: number, max: number): number {
 // session. Turn
 // it off for stdio, where one process already is one session.
 export function buildServer({ conversationIds = true } = {}): McpServer {
-  const server = new McpServer({ name: "shakespeare-monologues", version: "0.1.0" });
+  const server = new McpServer({ name: "shakespeare-monologues", version: "0.2.0" });
   // Emit PostHog's native $mcp_* analytics ($mcp_tool_call, $mcp_initialize, …).
   // Handlers below are untouched; the SDK wraps tool dispatch. collectFeedback
   // adds a `send_feedback` tool so agents can report missing capabilities or
