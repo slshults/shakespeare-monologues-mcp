@@ -22,6 +22,11 @@ const API_URL =
 // Base for the other endpoints, e.g. ".../api" from ".../api/monologues.json".
 const API_BASE = API_URL.replace(/\/monologues\.json.*$/, "");
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const UPSTREAM_TIMEOUT_MS = 10_000; // abort slow upstream fetches so abandoned requests don't pile up
+const upstreamInit = () => ({
+  headers: { accept: "application/json" },
+  signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+});
 const ATTRIBUTION =
   "Source: shakespeare-monologues.org (CC BY-NC-SA 4.0). Full text, scene context, and a modern-English paraphrase are on each monologue's `url`.";
 
@@ -55,7 +60,7 @@ let cache: { at: number; data: Monologue[] } | null = null;
 
 async function getIndex(): Promise<Monologue[]> {
   if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.data;
-  const res = await fetch(API_URL, { headers: { accept: "application/json" } });
+  const res = await fetch(API_URL, upstreamInit());
   if (!res.ok) throw new Error(`Upstream API returned ${res.status}`);
   const json = (await res.json()) as { monologues: Monologue[] };
   cache = { at: Date.now(), data: json.monologues };
@@ -64,7 +69,7 @@ async function getIndex(): Promise<Monologue[]> {
 
 // Fetch a JSON endpoint; null on 404, throws on other errors.
 async function fetchJson(url: string): Promise<any> {
-  const res = await fetch(url, { headers: { accept: "application/json" } });
+  const res = await fetch(url, upstreamInit());
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Upstream ${res.status} for ${url}`);
   return res.json();
