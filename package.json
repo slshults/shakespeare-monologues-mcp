@@ -26,7 +26,7 @@
   "type": "module",
   "main": "dist/index.js",
   "engines": {
-    "node": ">=18"
+    "node": "^20.20.0 || >=22.22.0"
   },
   "scripts": {
     "build": "tsc",
@@ -49,7 +49,7 @@
     "typescript": "^5.5.0"
   },
   "bin": {
-    "shakespeare-monologues-mcp": "./dist/stdio.js"
+    "shakespeare-monologues-mcp": "dist/stdio.js"
   },
   "files": [
     "dist",
