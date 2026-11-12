@@ -1,6 +1,6 @@
 {
   "name": "shakespeare-monologues-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "mcpName": "io.github.slshults/shakespeare-monologues",
   "description": "Read-only MCP server for shakespeare-monologues.org — search and fetch Shakespeare monologue metadata over the Model Context Protocol.",
   "license": "MIT",
