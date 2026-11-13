@@ -5,6 +5,7 @@
  * Node host with no session store. The tools themselves live in `server.ts`,
  * shared with the stdio entry point.
  */
+import { isIP } from "node:net";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { buildServer, posthog } from "./server.js";
@@ -30,8 +31,16 @@ const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: BODY_LIMIT }));
 
+// nginx (proxy_pass to 127.0.0.1:3000) sets X-Real-IP from $remote_addr. Trust
+// it only from a loopback peer, and only if it's a plain address (no IPv6 zone
+// id), so a direct or forged request can't put someone else's IP or arbitrary
+// text into the journal lines a future fail2ban jail would read.
+const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 function clientIp(req: Request): string {
-  return req.get("x-real-ip") ?? req.socket.remoteAddress ?? "unknown";
+  const peer = req.socket.remoteAddress ?? "unknown";
+  const realIp = req.get("x-real-ip");
+  if (LOOPBACK.has(peer) && realIp && !realIp.includes("%") && isIP(realIp)) return realIp;
+  return peer;
 }
 
 function jsonRpcError(res: Response, status: number, code: number, message: string) {

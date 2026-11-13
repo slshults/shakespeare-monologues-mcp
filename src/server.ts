@@ -57,9 +57,20 @@ type Monologue = {
 };
 
 let cache: { at: number; data: Monologue[] } | null = null;
+let indexInFlight: Promise<Monologue[]> | null = null;
 
+// Concurrent callers on a cold or expired cache share one upstream fetch.
 async function getIndex(): Promise<Monologue[]> {
   if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.data;
+  if (!indexInFlight) {
+    indexInFlight = fetchIndex().finally(() => {
+      indexInFlight = null;
+    });
+  }
+  return indexInFlight;
+}
+
+async function fetchIndex(): Promise<Monologue[]> {
   const res = await fetch(API_URL, upstreamInit());
   if (!res.ok) throw new Error(`Upstream API returned ${res.status}`);
   const json = (await res.json()) as { monologues: Monologue[] };
@@ -107,7 +118,12 @@ function safeTool(fn: (args: any) => Promise<ToolResult>): (args: any) => Promis
     try {
       return await fn(args);
     } catch (err) {
-      console.error("Tool handler error:", err);
+      const e = err as { name?: string; cause?: { code?: string } } | null;
+      if (e?.name === "TimeoutError" || e?.cause?.code === "UND_ERR_CONNECT_TIMEOUT") {
+        console.error(`Tool handler error: upstream timed out after ${UPSTREAM_TIMEOUT_MS} ms`);
+      } else {
+        console.error("Tool handler error:", err);
+      }
       return guide("The monologue service is temporarily unavailable. Please try again in a moment.");
     }
   };
