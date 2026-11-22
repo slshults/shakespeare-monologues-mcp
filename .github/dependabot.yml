@@ -1,0 +1,31 @@
+# Keep the PostHog SDK current (@posthog/mcp and posthog-node).
+# .github/workflows/dependabot-auto-merge.yml merges these PRs when they
+# change nothing but PostHog package versions. Merging doesn't publish to npm;
+# publishing stays a manual step.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Vancouver"
+    allow:
+      - dependency-name: "@posthog/*"
+      - dependency-name: "posthog-node"
+    groups:
+      posthog:
+        patterns:
+          - "@posthog/*"
+          - "posthog-node"
+    open-pull-requests-limit: 2
+    # Wait 7 days after a release before proposing it, so a bad or
+    # compromised release has time to be caught and yanked (PostHog's
+    # Shai-Hulud post-mortem suggests at least 3; GitHub's default is 3).
+    # Security updates skip the cooldown. To take a version sooner, bump it
+    # by hand.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"

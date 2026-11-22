@@ -1,0 +1,14 @@
+# Steven owns everything, so with "Require review from Code Owners" on, any
+# change to .github/ (workflows, Dependabot config) needs his review.
+* @slshults
+
+# package.json and package-lock.json are left without an owner so the
+# Dependabot auto-merge workflow's approval can count for PostHog SDK bumps.
+# The workflow checks those files change nothing but PostHog versions before
+# it approves. Other PRs touching them still need the usual approval.
+#
+# "Allow GitHub Actions to create and approve pull requests" is repo-wide, so
+# any future workflow with a write token could approve PRs touching these two
+# files. Keep dependabot-auto-merge.yml the only workflow that approves.
+/package.json
+/package-lock.json

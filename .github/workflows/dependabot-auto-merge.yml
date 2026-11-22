@@ -1,0 +1,231 @@
+# Auto-approve and auto-merge Dependabot PRs that only bump the PostHog SDK
+# (@posthog/* and posthog-node). dependabot.yml already limits Dependabot to
+# those packages; this workflow checks the PR's actual files before it merges,
+# so anything else in the diff (another package, a script, an install hook, a
+# tarball from somewhere other than the npm registry) is left for a human.
+# All semver types, majors included, are merged.
+# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions
+#
+# Needs two repo settings: Settings > Actions > General > "Allow GitHub
+# Actions to create and approve pull requests", and Settings > General >
+# "Allow auto-merge".
+#
+# Never checks out or runs the PR's code: it reads package.json and
+# package-lock.json through the API as data. Merging doesn't publish to npm
+# or deploy; both stay manual.
+
+name: Dependabot auto-merge
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# One run per PR at a time, so a withdraw can't race an approve.
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  dependabot:
+    runs-on: ubuntu-latest
+    # Only on PRs Dependabot opened, from a branch in this repo (not a fork),
+    # and only in this repo itself (not in a fork of it). Who triggered the
+    # event is checked in the first step instead, so that a push by anyone
+    # else still reaches the withdraw step at the end.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.repository == 'slshults/shakespeare-monologues-mcp'
+    steps:
+      - name: Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a  # v2.5.0
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      # Defense in depth alongside the dependabot.yml allow filter.
+      - name: Verify the dependencies are PostHog's
+        id: verify
+        env:
+          # Passed through env, never interpolated into the script.
+          DEP_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          # A manual re-run keeps the original actor.
+          ACTOR: ${{ github.actor }}
+        run: |
+          ok=true
+          [[ "$ACTOR" == "dependabot[bot]" ]] || ok=false
+          [[ "$ECOSYSTEM" == "npm_and_yarn" ]] || ok=false
+          [[ -n "$DEP_NAMES" ]] || ok=false
+          IFS=',' read -ra names <<< "$DEP_NAMES"
+          for n in "${names[@]}"; do
+            n="${n#"${n%%[![:space:]]*}"}"; n="${n%"${n##*[![:space:]]}"}"
+            [[ "$n" =~ ^(@posthog/[A-Za-z0-9._-]+|posthog-node)$ ]] || ok=false
+          done
+          echo "allowed=$ok" >> "$GITHUB_OUTPUT"
+          [[ "$ok" == true ]] || echo "::warning::Not a PostHog npm update from Dependabot - skipping auto-merge"
+
+      # fetch-metadata only reads the PR's first commit, so check what the PR
+      # as a whole changes, against the commit it branched from.
+      - name: Verify the diff is only PostHog versions
+        id: diff
+        if: steps.verify.outputs.allowed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DEP_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::warning::$1 - skipping auto-merge"; echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ && "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "unexpected commit ids"
+
+          merge_base=$(gh api "repos/$REPO/compare/$BASE_SHA...$HEAD_SHA" --jq '.merge_base_commit.sha')
+          [[ "$merge_base" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't find the merge base"
+
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' | sort -u)
+          case "$files" in
+            "package-lock.json"|$'package-lock.json\npackage.json') ;;
+            *) fail "PR changes files other than package.json and package-lock.json" ;;
+          esac
+
+          mkdir -p "$RUNNER_TEMP/v"
+          for f in package.json package-lock.json; do
+            for side in base head; do
+              ref=$merge_base; [[ $side == head ]] && ref=$HEAD_SHA
+              gh api -H "Accept: application/vnd.github.raw" \
+                "repos/$REPO/contents/$f?ref=$ref" > "$RUNNER_TEMP/v/$side-$f"
+            done
+          done
+
+          cat > "$RUNNER_TEMP/v/check.jq" <<'JQ'
+          # BEGIN posthog-only check (kept in step with dependabot_deploy.py)
+          # \A and \z anchor the whole string; $ would also accept a trailing newline.
+          def allowed_name: test("\\A(@posthog/[A-Za-z0-9][A-Za-z0-9._-]*|posthog-node)\\z");
+          def allowed_path: test("\\Anode_modules/(@posthog/[A-Za-z0-9][A-Za-z0-9._-]*|posthog-node)(/node_modules/(@posthog/[A-Za-z0-9][A-Za-z0-9._-]*|posthog-node))*\\z");
+          def plain_spec: type == "string" and test("\\A[\\^~]?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?\\z");
+          def dep_fields: ["dependencies","devDependencies","optionalDependencies","peerDependencies"];
+          def strip: reduce dep_fields[] as $f (.;
+            if (.[$f]|type) == "object" then .[$f] |= with_entries(select(.key|allowed_name|not)) else . end);
+          def specs_ok: [dep_fields[] as $f | (.[$f] // {}) | to_entries[] | select(.key|allowed_name) | .value] | all(plain_spec);
+          def tarball($n; $v): "https://registry.npmjs.org/\($n)/-/\($n|split("/")|last)-\($v).tgz";
+          def entry_ok($key):
+            type == "object"
+            and (.version|type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?\\z"))
+            and .resolved == tarball($key|sub("^.*node_modules/";""); .version)
+            and (.integrity|type == "string" and test("\\Asha512-[A-Za-z0-9+/]{86}==\\z"))
+            and ((.hasInstallScript // false) == false)
+            and ((.link // false) == false)
+            and (has("name")|not);
+          $pa[0] as $pa | $pb[0] as $pb | $la[0] as $la | $lb[0] as $lb |
+          ($la.packages // {}) as $A | ($lb.packages // {}) as $B |
+          [($A + $B | keys[]) | select(. != "") | select($A[.] != $B[.])] as $changed |
+          {ok: (
+          ($pa|type) == "object" and ($pb|type) == "object"
+          and (($pa|strip) == ($pb|strip)) and ($pb|specs_ok)
+          and ($lb.lockfileVersion == 2 or $lb.lockfileVersion == 3)
+          and (($la|del(.packages)) == ($lb|del(.packages)))
+          and (($A|type) == "object") and (($B|type) == "object")
+          and ((($A[""] // {})|strip) == (($B[""] // {})|strip)) and (($B[""] // {})|specs_ok)
+          and ($changed | all(allowed_path))
+          and ([$changed[] as $k | select($B[$k] != null) | $B[$k] | entry_ok($k)] | all)
+          ),
+          # The packages to look up on the npm registry in the next part.
+          entries: [$changed[] as $k | select(($B[$k]|type) == "object")
+            | {name: ($k|sub("^.*node_modules/";"")), version: $B[$k].version, integrity: $B[$k].integrity}]}
+          # END posthog-only check
+          JQ
+
+          jq -n \
+            --slurpfile pa "$RUNNER_TEMP/v/base-package.json" --slurpfile pb "$RUNNER_TEMP/v/head-package.json" \
+            --slurpfile la "$RUNNER_TEMP/v/base-package-lock.json" --slurpfile lb "$RUNNER_TEMP/v/head-package-lock.json" \
+            -f "$RUNNER_TEMP/v/check.jq" > "$RUNNER_TEMP/v/result.json" || fail "couldn't parse package files"
+          [[ "$(jq -r .ok "$RUNNER_TEMP/v/result.json")" == "true" ]] || fail "the PR changes more than PostHog versions"
+
+          # Check every changed PostHog package (nested ones too) against the
+          # npm registry: the lockfile's tarball hash must be the registry's.
+          # The packages Dependabot bumped must also be at least 7 days old.
+          # Nested ones (like @posthog/core, which releases almost daily) get
+          # no age check here, or nearly every PR would wait; the weekly
+          # deploy job on the PC checks their age before anything reaches
+          # production.
+          IFS=',' read -ra bumped <<< "$DEP_NAMES"
+          is_bumped() { local b; for b in "${bumped[@]}"; do
+            b="${b#"${b%%[![:space:]]*}"}"; b="${b%"${b##*[![:space:]]}"}"
+            [[ "$b" == "$1" ]] && return 0; done; return 1; }
+          cutoff=$(( $(date -u +%s) - 7 * 86400 ))
+          while IFS=$'\t' read -r name version integrity; do
+            doc=$(curl -fsS --max-time 30 "https://registry.npmjs.org/${name/\//%2F}") \
+              || fail "couldn't read the npm registry"
+            jq -e --arg v "$version" --arg i "$integrity" \
+              '.versions[$v].dist.integrity == $i' <<< "$doc" > /dev/null \
+              || fail "$name $version doesn't match the npm registry's tarball hash"
+            # The registry's own word on install scripts, not just the lockfile's.
+            jq -e --arg v "$version" '.versions[$v] | ((.hasInstallScript // false) == false)
+              and ((.scripts // {}) | has("preinstall") or has("install") or has("postinstall") | not)' \
+              <<< "$doc" > /dev/null \
+              || fail "$name $version has an install script on the npm registry"
+            if is_bumped "$name"; then
+              jq -e --arg v "$version" --argjson cutoff "$cutoff" \
+                '(.time[$v] | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) <= $cutoff' <<< "$doc" > /dev/null \
+                || fail "$name $version was published under 7 days ago"
+            fi
+          done < <(jq -r '.entries[] | [.name, .version, .integrity] | @tsv' "$RUNNER_TEMP/v/result.json")
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      # Approve and merge only the exact commit this run checked, so a later
+      # push to the branch can't ride along on this approval.
+      - name: Auto-approve PR
+        if: steps.verify.outputs.allowed == 'true' && steps.diff.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api --method POST "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+            -f event=APPROVE -f commit_id="$HEAD_SHA" > /dev/null
+
+      - name: Auto-merge PR
+        if: steps.verify.outputs.allowed == 'true' && steps.diff.outputs.ok == 'true'
+        run: gh pr merge --auto --squash --match-head-commit "$HEAD_SHA" "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # If this run didn't pass its checks, take back anything an earlier run
+      # did for an older commit on this PR: auto-merge stays armed across
+      # Dependabot's force-pushes, and an approval may too.
+      - name: Withdraw earlier approval and auto-merge
+        if: always() && (steps.verify.outputs.allowed != 'true' || steps.diff.outputs.ok != 'true')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          approvals() {
+            local out
+            out=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+              --jq '.[] | select(.user.login == "github-actions[bot]" and .state == "APPROVED") | .id') \
+              || { echo "::error::Couldn't read the PR's reviews"; exit 1; }
+            grep -E '^[0-9]+$' <<< "$out" || true
+          }
+          gh pr merge --disable-auto "$PR_URL" 2>/dev/null || true
+          for id in $(approvals); do
+            gh api --method PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$id/dismissals" \
+              -f message="Checks didn't pass on the newest commit" -f event=DISMISS > /dev/null \
+              || echo "::warning::couldn't dismiss review $id"
+          done
+          # Fail loudly if anything is still armed, so the run shows red.
+          left=""
+          [[ "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')" == "false" ]] \
+            || left="auto-merge is still on"
+          remaining=$(approvals) || remaining="couldn't check"
+          [[ -z "$remaining" ]] || left="${left:+$left, }a bot approval may still be there"
+          if [[ -n "$left" ]]; then echo "::error::Couldn't withdraw: $left"; exit 1; fi
