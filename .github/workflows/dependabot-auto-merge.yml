@@ -3,7 +3,10 @@
 # those packages; this workflow checks the PR's actual files before it merges,
 # so anything else in the diff (another package, a script, an install hook, a
 # tarball from somewhere other than the npm registry) is left for a human.
-# All semver types, majors included, are merged.
+# All semver types, majors included, are merged, once the bumped releases
+# are 7 days old (Dependabot proposes releases once they're a day old, on
+# its weekly run, and dependabot-recheck.yml re-runs this workflow every 6
+# hours until they're 7 days old).
 # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions
 #
 # Needs two repo settings: Settings > Actions > General > "Allow GitHub
@@ -148,7 +151,8 @@ jobs:
 
           # Check every changed PostHog package (nested ones too) against the
           # npm registry: the lockfile's tarball hash must be the registry's.
-          # The packages Dependabot bumped must also be at least 7 days old.
+          # The packages Dependabot bumped must also be at least 7 days old;
+          # until they are, dependabot-recheck.yml re-runs this workflow.
           # Nested ones (like @posthog/core, which releases almost daily) get
           # no age check here, or nearly every PR would wait; the weekly
           # deploy job on the PC checks their age before anything reaches
